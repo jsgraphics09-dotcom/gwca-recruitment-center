@@ -133,6 +133,7 @@
     <button id="geocodeStudents" class="secondary" style="margin-top:7px">Geocode Missing Addresses</button>
     <button id="toggleStudents" style="margin-top:7px">Show Student Locations</button>
         <div id="studentStatus" class="upload-status">No student location file loaded.</div>
+    <div id="geocodeStatus" class="upload-status"></div>
   </div>
 
   <h3>Bus Stops</h3>
@@ -753,7 +754,7 @@ document.getElementById("logoutBtn").onclick=async()=>{
 
 
 async function geocodeMissingAddresses(){
-  const status=document.getElementById("geocodeStatus");
+  const status=document.getElementById("geocodeStatus") || document.getElementById("studentStatus");
   const btn=document.getElementById("geocodeStudents");
 
   if(!currentSession){
