@@ -127,9 +127,10 @@
   <div class="card disabled-card" id="studentToolsCard">
     <label>Upload Student Address CSV</label>
     <input type="file" id="studentCsv" accept=".csv" style="width:100%;font-size:12px"/>
-    <div class="small" style="margin-top:6px">Accepts GWCA roster columns including Student Number, First Name, Last Name, Street, City and ZIP. Latitude/Longitude are optional.</div>
+    <div class="small" style="margin-top:6px">Accepts GWCA roster columns including Student Number, First Name, Last Name, Street, City and ZIP. After import, use Geocode Missing Addresses to create map coordinates.</div>
     <button id="importStudents" class="secondary" style="margin-top:9px">Import Addresses to Supabase</button>
     <button id="loadStudents" style="margin-top:7px">Load Student Locations</button>
+    <button id="geocodeStudents" class="secondary" style="margin-top:7px">Geocode Missing Addresses</button>
     <button id="toggleStudents" style="margin-top:7px">Show Student Locations</button>
         <div id="studentStatus" class="upload-status">No student location file loaded.</div>
   </div>
@@ -749,6 +750,65 @@ document.getElementById("loginBtn").onclick=async()=>{
 document.getElementById("logoutBtn").onclick=async()=>{
   await supabaseClient.auth.signOut();
 };
+
+
+async function geocodeMissingAddresses(){
+  const status=document.getElementById("geocodeStatus");
+  const btn=document.getElementById("geocodeStudents");
+
+  if(!currentSession){
+    status.textContent="Sign in before geocoding student addresses.";
+    return;
+  }
+
+  btn.disabled=true;
+  let totalProcessed=0;
+  let totalGeocoded=0;
+  let totalFailed=0;
+  let rounds=0;
+
+  try{
+    while(rounds < 50){
+      rounds++;
+      status.textContent=`Geocoding addresses... processed ${totalProcessed}, mapped ${totalGeocoded}, failed ${totalFailed}.`;
+
+      const {data,error}=await supabaseClient.functions.invoke("geocode-students",{
+        body:{limit:25}
+      });
+
+      if(error){
+        throw new Error(error.message || "Edge Function call failed.");
+      }
+
+      totalProcessed += Number(data?.processed || 0);
+      totalGeocoded += Number(data?.geocoded || 0);
+      totalFailed += Number(data?.failed || 0);
+
+      const remaining=Number(data?.remaining || 0);
+      status.textContent=`Processed ${totalProcessed}. Mapped ${totalGeocoded}. Failed ${totalFailed}. Remaining ${remaining}.`;
+
+      if(remaining <= 0 || Number(data?.processed || 0) === 0) break;
+
+      // Small pause to avoid hammering the geocoder.
+      await new Promise(resolve=>setTimeout(resolve,900));
+    }
+
+    await loadStudentLocationsFromSupabase();
+
+    if(totalFailed){
+      status.textContent=`Finished. ${totalGeocoded} addresses mapped. ${totalFailed} could not be matched automatically.`;
+    }else{
+      status.textContent=`Finished. ${totalGeocoded} addresses mapped successfully.`;
+    }
+  }catch(err){
+    status.textContent="Geocoding failed: " + (err?.message || String(err));
+    console.error(err);
+  }finally{
+    btn.disabled=false;
+  }
+}
+
+document.getElementById("geocodeStudents").onclick=geocodeMissingAddresses;
 
 initAuth();
 
