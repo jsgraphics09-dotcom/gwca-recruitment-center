@@ -39,6 +39,8 @@
     .small{font-size:11px;color:var(--muted);margin-top:4px}
     .score{color:var(--orange)}
     .note{font-size:11px;line-height:1.4;padding:10px;border-radius:10px;background:#fff7ea;border:1px solid #ffd9a8;color:#704214;margin-top:14px}
+.upload-status{font-size:11px;line-height:1.4;margin-top:8px;color:#556070}
+.danger{background:#fff0f0;border:1px solid #f0b2b2;color:#7d1f1f}
     .maplibregl-popup-content{border-radius:12px;padding:14px}
     .legend{position:absolute;right:14px;top:92px;z-index:3;background:#fff;border-radius:12px;padding:10px 12px;
       box-shadow:0 3px 16px rgba(0,0,0,.14);font-size:12px;line-height:1.7}
@@ -60,7 +62,7 @@
   <div class="stats">
     <div class="card stat"><strong id="scholarCount">87</strong><span>Bus Scholars</span></div>
     <div class="card stat"><strong id="stopCount">20</strong><span>Unique Stops</span></div>
-    <div class="card stat"><strong id="routeCount">3</strong><span>Bus Routes</span></div>
+    <div class="card stat"><strong id="studentPointCount">0</strong><span>Student Locations</span></div>
     <div class="card stat"><strong id="priorityCount">0</strong><span>Priority Zones</span></div>
   </div>
 
@@ -97,11 +99,23 @@
     <button id="recruitMode" class="secondary">Recruitment Mode: OFF</button>
   </div>
 
+
+  <h3>Current Student Locations</h3>
+  <div class="card">
+    <label>Upload Student Address CSV</label>
+    <input type="file" id="studentCsv" accept=".csv" style="width:100%;font-size:12px"/>
+    <div class="small" style="margin-top:6px">Recommended columns: Student ID, Scholar, Grade, Address, City, State, ZIP, Latitude, Longitude</div>
+    <button id="importStudents" class="secondary" style="margin-top:9px">Import Student Locations</button>
+    <button id="toggleStudents" style="margin-top:7px">Show Student Locations</button>
+    <button id="clearStudents" style="margin-top:7px">Clear Imported Students</button>
+    <div id="studentStatus" class="upload-status">No student location file loaded.</div>
+  </div>
+
   <h3>Bus Stops</h3>
   <div id="stopList" class="stop-list"></div>
 
   <div class="note">
-    Version 1 uses starter intersection coordinates. Verify stop coordinates before making final recruitment or transportation decisions.
+    Bus-stop coordinates are starter coordinates. Student address uploads stay in this browser only. Do not commit student-address files to GitHub.
   </div>
 </aside>
 
@@ -112,6 +126,7 @@
     <div><span class="dot" style="background:#2878d0"></span>Blue Bus</div>
     <div><span class="dot" style="background:#d83b3b"></span>Red Bus</div>
     <div><span class="dot" style="background:#0a2446;border:2px solid #f47c00"></span>GWCA</div>
+    <div><span class="dot" style="background:#248b5a"></span>Student Location</div>
   </div>
 </div>
 </div>
@@ -151,6 +166,8 @@ let routeFilter="All";
 let circlesVisible=true;
 let recruitmentMode=false;
 let selectedStopName=null;
+let studentsVisible=false;
+let studentLocations=[];
 
 const map = new maplibregl.Map({
   container:"map",
@@ -248,6 +265,61 @@ function refresh(){
   });
 }
 
+
+function parseCsvLine(line){
+  const out=[]; let cur=""; let q=false;
+  for(let i=0;i<line.length;i++){
+    const ch=line[i];
+    if(ch === '"'){
+      if(q && line[i+1] === '"'){ cur+='"'; i++; }
+      else q=!q;
+    } else if(ch === "," && !q){ out.push(cur); cur=""; }
+    else cur+=ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+function normalizeHeader(h){
+  return String(h||"").trim().toLowerCase().replace(/[^a-z0-9]+/g,"");
+}
+
+function studentGeoJSON(){
+  return {
+    type:"FeatureCollection",
+    features: studentLocations
+      .filter(s=>Number.isFinite(s.lat) && Number.isFinite(s.lng))
+      .map((s,i)=>({
+        type:"Feature",
+        properties:{...s,id:i},
+        geometry:{type:"Point",coordinates:[s.lng,s.lat]}
+      }))
+  };
+}
+
+function saveStudentLocations(){
+  try{
+    localStorage.setItem("gwcaStudentLocations", JSON.stringify(studentLocations));
+  }catch(e){}
+}
+
+function loadStudentLocations(){
+  try{
+    const saved=JSON.parse(localStorage.getItem("gwcaStudentLocations")||"[]");
+    if(Array.isArray(saved)) studentLocations=saved;
+  }catch(e){ studentLocations=[]; }
+}
+
+function refreshStudents(){
+  const count=studentLocations.filter(s=>Number.isFinite(s.lat)&&Number.isFinite(s.lng)).length;
+  document.getElementById("studentPointCount").textContent=count;
+  if(map.getSource("students")) map.getSource("students").setData(studentGeoJSON());
+  if(map.getLayer("students")){
+    map.setLayoutProperty("students","visibility",studentsVisible?"visible":"none");
+  }
+  document.getElementById("toggleStudents").textContent=studentsVisible?"Hide Student Locations":"Show Student Locations";
+}
+
 map.on("load",()=>{
   const d=sourceData();
 
@@ -267,6 +339,28 @@ map.on("load",()=>{
     "circle-stroke-color":"#ffffff",
     "circle-stroke-width":2
   }});
+
+  loadStudentLocations();
+  map.addSource("students",{type:"geojson",data:studentGeoJSON()});
+  map.addLayer({id:"students",type:"circle",source:"students",layout:{visibility:"none"},paint:{
+    "circle-radius":6,
+    "circle-color":"#248b5a",
+    "circle-stroke-color":"#ffffff",
+    "circle-stroke-width":1.5,
+    "circle-opacity":0.9
+  }});
+
+  map.on("click","students",e=>{
+    const p=e.features[0].properties;
+    new maplibregl.Popup()
+      .setLngLat(e.lngLat)
+      .setHTML(`<div style="min-width:220px">
+        <div style="font-size:15px;font-weight:900;color:#0a2446">${p.scholar || "Student"}</div>
+        <div><b>Grade:</b> ${p.grade || ""}</div>
+        <div style="font-size:11px;color:#6d7888;margin-top:5px">Student locations are visible only from the file imported into this browser.</div>
+      </div>`)
+      .addTo(map);
+  });
 
   map.on("click","school-core",e=>{
     new maplibregl.Popup()
@@ -310,6 +404,7 @@ map.on("load",()=>{
   map.on("mouseenter","markers",()=>map.getCanvas().style.cursor="pointer");
   map.on("mouseleave","markers",()=>map.getCanvas().style.cursor="");
   refresh();
+  refreshStudents();
 });
 
 document.querySelectorAll(".route-btn").forEach(btn=>btn.onclick=()=>{
@@ -344,6 +439,89 @@ document.getElementById("recruitMode").onclick=()=>{
   document.getElementById("recruitMode").textContent=recruitmentMode?"Recruitment Mode: ON":"Recruitment Mode: OFF";
   refresh();
 };
+
+document.getElementById("importStudents").onclick=()=>{
+  const file=document.getElementById("studentCsv").files[0];
+  const status=document.getElementById("studentStatus");
+  if(!file){ status.textContent="Choose a CSV file first."; return; }
+
+  const reader=new FileReader();
+  reader.onload=e=>{
+    const lines=String(e.target.result||"").split(/\r?\n/).filter(x=>x.trim().length);
+    if(lines.length<2){ status.textContent="The CSV does not contain student rows."; return; }
+
+    const headers=parseCsvLine(lines[0]).map(normalizeHeader);
+    const findIndex=(names)=>{
+      for(const n of names){
+        const i=headers.indexOf(normalizeHeader(n));
+        if(i>=0) return i;
+      }
+      return -1;
+    };
+
+    const idx={
+      studentId:findIndex(["student id","studentid","id"]),
+      scholar:findIndex(["scholar","student","student name","name"]),
+      grade:findIndex(["grade"]),
+      address:findIndex(["address","home address","street address"]),
+      city:findIndex(["city"]),
+      state:findIndex(["state"]),
+      zip:findIndex(["zip","zipcode","postal code"]),
+      lat:findIndex(["latitude","lat"]),
+      lng:findIndex(["longitude","lng","lon","long"])
+    };
+
+    if(idx.scholar<0 && idx.studentId<0){
+      status.textContent="CSV needs at least a Student ID or Scholar column.";
+      return;
+    }
+
+    const parsed=[];
+    let missingCoords=0;
+    for(let r=1;r<lines.length;r++){
+      const cols=parseCsvLine(lines[r]);
+      const val=i=>i>=0 ? String(cols[i]??"").trim() : "";
+      const lat=idx.lat>=0 ? Number(val(idx.lat)) : NaN;
+      const lng=idx.lng>=0 ? Number(val(idx.lng)) : NaN;
+      if(!Number.isFinite(lat) || !Number.isFinite(lng)) missingCoords++;
+
+      parsed.push({
+        studentId:val(idx.studentId),
+        scholar:val(idx.scholar),
+        grade:val(idx.grade),
+        address:val(idx.address),
+        city:val(idx.city),
+        state:val(idx.state),
+        zip:val(idx.zip),
+        lat:Number.isFinite(lat)?lat:null,
+        lng:Number.isFinite(lng)?lng:null
+      });
+    }
+
+    studentLocations=parsed;
+    saveStudentLocations();
+    studentsVisible=true;
+    refreshStudents();
+
+    const plotted=parsed.length-missingCoords;
+    status.textContent=`Imported ${parsed.length} students. ${plotted} can be plotted now. ${missingCoords} are missing Latitude/Longitude.`;
+  };
+  reader.readAsText(file);
+};
+
+document.getElementById("toggleStudents").onclick=()=>{
+  studentsVisible=!studentsVisible;
+  refreshStudents();
+};
+
+document.getElementById("clearStudents").onclick=()=>{
+  studentLocations=[];
+  studentsVisible=false;
+  try{localStorage.removeItem("gwcaStudentLocations");}catch(e){}
+  refreshStudents();
+  document.getElementById("studentStatus").textContent="Imported student locations cleared from this browser.";
+};
+
 </script>
 </body>
 </html>
