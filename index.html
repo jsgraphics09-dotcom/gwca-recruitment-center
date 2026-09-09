@@ -132,6 +132,10 @@
     <button id="loadStudents" style="margin-top:7px">Load Student Locations</button>
     <button id="geocodeStudents" class="secondary" style="margin-top:7px">Geocode Missing Addresses</button>
     <button id="toggleStudents" style="margin-top:7px">Show Student Locations</button>
+    <button id="toggleHeatmap" class="secondary" style="margin-top:7px">Show Student Heat Map</button>
+    <label style="margin-top:10px;display:block">Heat Map Intensity</label>
+    <input id="heatIntensity" type="range" min="1" max="10" value="5" style="width:100%">
+    <button id="fitStudents" style="margin-top:7px">Zoom to Student Coverage</button>
         <div id="studentStatus" class="upload-status">No student location file loaded.</div>
     <div id="geocodeStatus" class="upload-status"></div>
   </div>
@@ -140,7 +144,7 @@
   <div id="stopList" class="stop-list"></div>
 
   <div class="note">
-    Student address files are not stored in GitHub. Access to student location data requires an authenticated GWCA staff account.
+    Student address files are not stored in GitHub. Exact student locations and the heat map require an authenticated GWCA staff account.
   </div>
 </aside>
 
@@ -193,6 +197,7 @@ let circlesVisible=true;
 let recruitmentMode=false;
 let selectedStopName=null;
 let studentsVisible=false;
+let heatmapVisible=false;
 let studentLocations=[];
 const SUPABASE_URL="https://ftlskxbiacprefyrkhma.supabase.co";
 const SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ0bHNreGJpYWNwcmVmeXJraG1hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgyOTY0MjEsImV4cCI6MjEwMzg3MjQyMX0.NzYw4xUX3Wj_ydKZED7mY0-HxX_phESnXfix-BmBK_M";
@@ -365,7 +370,12 @@ function refreshStudents(){
   if(map.getLayer("students")){
     map.setLayoutProperty("students","visibility",studentsVisible?"visible":"none");
   }
+  if(map.getLayer("student-heat")){
+    map.setLayoutProperty("student-heat","visibility",heatmapVisible?"visible":"none");
+  }
   document.getElementById("toggleStudents").textContent=studentsVisible?"Hide Student Locations":"Show Student Locations";
+  const heatBtn=document.getElementById("toggleHeatmap");
+  if(heatBtn) heatBtn.textContent=heatmapVisible?"Hide Student Heat Map":"Show Student Heat Map";
 }
 
 map.on("load",()=>{
@@ -396,6 +406,20 @@ map.on("load",()=>{
     "circle-stroke-width":1.5,
     "circle-opacity":0.9
   }});
+
+  map.addLayer({
+    id:"student-heat",
+    type:"heatmap",
+    source:"students",
+    layout:{visibility:"none"},
+    maxzoom:16,
+    paint:{
+      "heatmap-weight":1,
+      "heatmap-intensity":1.5,
+      "heatmap-radius":34,
+      "heatmap-opacity":0.82
+    }
+  });
 
   map.on("click","students",e=>{
     const p=e.features[0].properties;
@@ -689,6 +713,30 @@ document.getElementById("loadStudents").onclick=async()=>{
 document.getElementById("toggleStudents").onclick=()=>{
   studentsVisible=!studentsVisible;
   refreshStudents();
+};
+
+document.getElementById("fitStudents").onclick=()=>{
+  if(!studentLocations.length){
+    document.getElementById("studentStatus").textContent="No mapped student locations loaded yet.";
+    return;
+  }
+  const b=new maplibregl.LngLatBounds();
+  studentLocations.forEach(s=>b.extend([s.lng,s.lat]));
+  b.extend([school.lng,school.lat]);
+  map.fitBounds(b,{padding:65,maxZoom:13});
+};
+
+document.getElementById("toggleHeatmap").onclick=()=>{
+  heatmapVisible=!heatmapVisible;
+  refreshStudents();
+};
+
+document.getElementById("heatIntensity").oninput=e=>{
+  const v=Number(e.target.value);
+  if(map.getLayer("student-heat")){
+    map.setPaintProperty("student-heat","heatmap-intensity",0.4 + v*0.22);
+    map.setPaintProperty("student-heat","heatmap-radius",14 + v*4);
+  }
 };
 
 
