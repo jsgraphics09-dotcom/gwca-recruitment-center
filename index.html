@@ -136,15 +136,24 @@
     <label style="margin-top:10px;display:block">Heat Map Intensity</label>
     <input id="heatIntensity" type="range" min="1" max="10" value="5" style="width:100%">
     <button id="fitStudents" style="margin-top:7px">Zoom to Student Coverage</button>
+    <button id="findOpportunities" class="secondary" style="margin-top:7px">Find Recruitment Opportunities</button>
+    <div id="opportunityStatus" class="upload-status"></div>
         <div id="studentStatus" class="upload-status">No student location file loaded.</div>
     <div id="geocodeStatus" class="upload-status"></div>
+  </div>
+
+
+  <h3>Recruitment Target Zones</h3>
+  <div class="card">
+    <div class="small">Ranks recruitment areas using current scholar density, transportation access, grade spread, and shared-route coverage.</div>
+    <div id="opportunityList" style="margin-top:8px"></div>
   </div>
 
   <h3>Bus Stops</h3>
   <div id="stopList" class="stop-list"></div>
 
   <div class="note">
-    Student address files are not stored in GitHub. Exact student locations and the heat map require an authenticated GWCA staff account.
+    Student address files are not stored in GitHub. Exact student locations, heat map, and recruitment opportunity analysis require an authenticated GWCA staff account.
   </div>
 </aside>
 
@@ -376,6 +385,109 @@ function refreshStudents(){
   document.getElementById("toggleStudents").textContent=studentsVisible?"Hide Student Locations":"Show Student Locations";
   const heatBtn=document.getElementById("toggleHeatmap");
   if(heatBtn) heatBtn.textContent=heatmapVisible?"Hide Student Heat Map":"Show Student Heat Map";
+}
+
+
+function milesBetween(lat1,lng1,lat2,lng2){
+  const R=3958.7613;
+  const toRad=d=>d*Math.PI/180;
+  const dLat=toRad(lat2-lat1);
+  const dLng=toRad(lng2-lng1);
+  const a=Math.sin(dLat/2)**2 +
+    Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLng/2)**2;
+  return 2*R*Math.asin(Math.sqrt(a));
+}
+
+function physicalStopGroups(){
+  const mapByName=new Map();
+  stops.forEach(s=>{
+    const key=s.name.trim().toLowerCase();
+    if(!mapByName.has(key)){
+      mapByName.set(key,{
+        name:s.name,
+        lat:s.lat,
+        lng:s.lng,
+        buses:new Set(),
+        routeRows:[],
+        grades:new Set(),
+        currentScholars:0
+      });
+    }
+    const g=mapByName.get(key);
+    g.buses.add(s.bus);
+    g.routeRows.push(s);
+    (s.grades||[]).forEach(gr=>g.grades.add(gr));
+    g.currentScholars += Number(s.count||0);
+  });
+  return [...mapByName.values()].map(g=>({
+    ...g,
+    buses:[...g.buses],
+    grades:[...g.grades]
+  }));
+}
+
+function studentsWithinMiles(lat,lng,miles){
+  return studentLocations.filter(s=>milesBetween(lat,lng,s.lat,s.lng)<=miles);
+}
+
+function opportunityScore(group){
+  const nearby=studentsWithinMiles(group.lat,group.lng,1.0);
+  const familyDensity=Math.min(nearby.length*2.5,45);
+  const busAccess=Math.min(group.buses.length*12,24);
+  const gradeSpread=Math.min(group.grades.length*3,18);
+  const currentBase=Math.min(group.currentScholars*0.6,13);
+  return Math.round(Math.min(100,familyDensity+busAccess+gradeSpread+currentBase));
+}
+
+function opportunityRows(){
+  return physicalStopGroups()
+    .map(g=>{
+      const nearby=studentsWithinMiles(g.lat,g.lng,1.0);
+      return {
+        ...g,
+        nearbyStudents:nearby.length,
+        score:opportunityScore(g)
+      };
+    })
+    .sort((a,b)=>b.score-a.score);
+}
+
+function highlightOpportunityZone(row){
+  const rMiles=1;
+  const poly=circlePolygon(row.lng,row.lat,rMiles);
+  const feature={
+    type:"Feature",
+    properties:{name:row.name,score:row.score},
+    geometry:{type:"Polygon",coordinates:[poly]}
+  };
+  const src=map.getSource("opportunity-zone");
+  if(src) src.setData({type:"FeatureCollection",features:[feature]});
+  map.setLayoutProperty("opportunity-zone-fill","visibility","visible");
+  map.setLayoutProperty("opportunity-zone-line","visibility","visible");
+  map.flyTo({center:[row.lng,row.lat],zoom:13.5});
+}
+
+function renderOpportunityList(rows){
+  const host=document.getElementById("opportunityList");
+  host.innerHTML="";
+  if(!rows.length){
+    host.innerHTML='<div class="small">Load student locations first.</div>';
+    return;
+  }
+
+  rows.slice(0,10).forEach((row,i)=>{
+    const item=document.createElement("div");
+    item.className="stop-item";
+    item.innerHTML=`
+      <div class="stop-top">
+        <span>#${i+1} ${row.name}</span>
+        <span class="score">${row.score}</span>
+      </div>
+      <div class="small">${row.nearbyStudents} mapped scholars within 1 mile • ${row.buses.join("/")} route${row.buses.length>1?"s":""} • ${row.grades.length} grade levels</div>
+    `;
+    item.onclick=()=>highlightOpportunityZone(row);
+    host.appendChild(item);
+  });
 }
 
 map.on("load",()=>{
@@ -713,6 +825,24 @@ document.getElementById("loadStudents").onclick=async()=>{
 document.getElementById("toggleStudents").onclick=()=>{
   studentsVisible=!studentsVisible;
   refreshStudents();
+};
+
+
+document.getElementById("findOpportunities").onclick=()=>{
+  const status=document.getElementById("opportunityStatus");
+  if(!currentSession){
+    status.textContent="Sign in and load student locations first.";
+    return;
+  }
+  if(!studentLocations.length){
+    status.textContent="No mapped student locations are loaded yet.";
+    renderOpportunityList([]);
+    return;
+  }
+
+  const rows=opportunityRows();
+  renderOpportunityList(rows);
+  status.textContent=`Analyzed ${rows.length} recruitment areas. Top opportunity: ${rows[0]?.name || "none"} (${rows[0]?.score || 0}/100).`;
 };
 
 document.getElementById("fitStudents").onclick=()=>{
