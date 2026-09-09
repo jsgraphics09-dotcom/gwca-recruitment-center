@@ -104,10 +104,10 @@
   <div class="card">
     <label>Upload Student Address CSV</label>
     <input type="file" id="studentCsv" accept=".csv" style="width:100%;font-size:12px"/>
-    <div class="small" style="margin-top:6px">Recommended columns: Student ID, Scholar, Grade, Address, City, State, ZIP, Latitude, Longitude</div>
-    <button id="importStudents" class="secondary" style="margin-top:9px">Import Student Locations</button>
+    <div class="small" style="margin-top:6px">Columns: Student ID, Address, City, State, ZIP. Optional: Latitude, Longitude.</div>
+    <button id="importStudents" class="secondary" style="margin-top:9px">Import Addresses to Supabase</button>
+    <button id="loadStudents" style="margin-top:7px">Load Student Locations</button>
     <button id="toggleStudents" style="margin-top:7px">Show Student Locations</button>
-    <button id="clearStudents" style="margin-top:7px">Clear Imported Students</button>
     <div id="studentStatus" class="upload-status">No student location file loaded.</div>
   </div>
 
@@ -132,6 +132,7 @@
 </div>
 
 <script src="https://unpkg.com/maplibre-gl@5.6.2/dist/maplibre-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const stops = [
   {name:"John R / Nevada", bus:"Yellow", count:9, grades:["Pre-K","K","4","5","6","7","8"], lng:-83.1035,lat:42.4209},
@@ -168,6 +169,9 @@ let recruitmentMode=false;
 let selectedStopName=null;
 let studentsVisible=false;
 let studentLocations=[];
+const SUPABASE_URL="https://ftlskxbiacprefyrkhma.supabase.co";
+const SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ0bHNreGJpYWNwcmVmeXJraG1hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgyOTY0MjEsImV4cCI6MjEwMzg3MjQyMX0.NzYw4xUX3Wj_ydKZED7mY0-HxX_phESnXfix-BmBK_M";
+const supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
 
 const map = new maplibregl.Map({
   container:"map",
@@ -297,17 +301,22 @@ function studentGeoJSON(){
   };
 }
 
-function saveStudentLocations(){
+async function testDatabase(){
+  const el=document.getElementById("dbStatus");
   try{
-    localStorage.setItem("gwcaStudentLocations", JSON.stringify(studentLocations));
-  }catch(e){}
+    const {error}=await supabaseClient.from("recruitment_students").select("student_id").limit(1);
+    el.textContent=error?"Database connected; student data access is protected by RLS.":"Database connected.";
+  }catch(e){el.textContent="Database connection failed.";}
 }
 
-function loadStudentLocations(){
-  try{
-    const saved=JSON.parse(localStorage.getItem("gwcaStudentLocations")||"[]");
-    if(Array.isArray(saved)) studentLocations=saved;
-  }catch(e){ studentLocations=[]; }
+async function loadStudentLocationsFromSupabase(){
+  const status=document.getElementById("studentStatus");
+  status.textContent="Loading student locations...";
+  const {data,error}=await supabaseClient.from("recruitment_student_map").select("student_id,first_name,last_name,grade,address,city,state,zip_code,latitude,longitude").not("latitude","is",null).not("longitude","is",null);
+  if(error){status.textContent="Could not load student locations. Staff RLS access is not enabled yet.";return;}
+  studentLocations=(data||[]).map(r=>({studentId:r.student_id,scholar:[r.first_name,r.last_name].filter(Boolean).join(" "),grade:r.grade||"",address:r.address||"",city:r.city||"",state:r.state||"",zip:r.zip_code||"",lat:Number(r.latitude),lng:Number(r.longitude)})).filter(s=>Number.isFinite(s.lat)&&Number.isFinite(s.lng));
+  refreshStudents();
+  status.textContent=`Loaded ${studentLocations.length} student locations from Supabase.`;
 }
 
 function refreshStudents(){
@@ -340,7 +349,6 @@ map.on("load",()=>{
     "circle-stroke-width":2
   }});
 
-  loadStudentLocations();
   map.addSource("students",{type:"geojson",data:studentGeoJSON()});
   map.addLayer({id:"students",type:"circle",source:"students",layout:{visibility:"none"},paint:{
     "circle-radius":6,
@@ -405,6 +413,7 @@ map.on("load",()=>{
   map.on("mouseleave","markers",()=>map.getCanvas().style.cursor="");
   refresh();
   refreshStudents();
+  testDatabase();
 });
 
 document.querySelectorAll(".route-btn").forEach(btn=>btn.onclick=()=>{
@@ -440,86 +449,9 @@ document.getElementById("recruitMode").onclick=()=>{
   refresh();
 };
 
-document.getElementById("importStudents").onclick=()=>{
-  const file=document.getElementById("studentCsv").files[0];
-  const status=document.getElementById("studentStatus");
-  if(!file){ status.textContent="Choose a CSV file first."; return; }
-
-  const reader=new FileReader();
-  reader.onload=e=>{
-    const lines=String(e.target.result||"").split(/\r?\n/).filter(x=>x.trim().length);
-    if(lines.length<2){ status.textContent="The CSV does not contain student rows."; return; }
-
-    const headers=parseCsvLine(lines[0]).map(normalizeHeader);
-    const findIndex=(names)=>{
-      for(const n of names){
-        const i=headers.indexOf(normalizeHeader(n));
-        if(i>=0) return i;
-      }
-      return -1;
-    };
-
-    const idx={
-      studentId:findIndex(["student id","studentid","id"]),
-      scholar:findIndex(["scholar","student","student name","name"]),
-      grade:findIndex(["grade"]),
-      address:findIndex(["address","home address","street address"]),
-      city:findIndex(["city"]),
-      state:findIndex(["state"]),
-      zip:findIndex(["zip","zipcode","postal code"]),
-      lat:findIndex(["latitude","lat"]),
-      lng:findIndex(["longitude","lng","lon","long"])
-    };
-
-    if(idx.scholar<0 && idx.studentId<0){
-      status.textContent="CSV needs at least a Student ID or Scholar column.";
-      return;
-    }
-
-    const parsed=[];
-    let missingCoords=0;
-    for(let r=1;r<lines.length;r++){
-      const cols=parseCsvLine(lines[r]);
-      const val=i=>i>=0 ? String(cols[i]??"").trim() : "";
-      const lat=idx.lat>=0 ? Number(val(idx.lat)) : NaN;
-      const lng=idx.lng>=0 ? Number(val(idx.lng)) : NaN;
-      if(!Number.isFinite(lat) || !Number.isFinite(lng)) missingCoords++;
-
-      parsed.push({
-        studentId:val(idx.studentId),
-        scholar:val(idx.scholar),
-        grade:val(idx.grade),
-        address:val(idx.address),
-        city:val(idx.city),
-        state:val(idx.state),
-        zip:val(idx.zip),
-        lat:Number.isFinite(lat)?lat:null,
-        lng:Number.isFinite(lng)?lng:null
-      });
-    }
-
-    studentLocations=parsed;
-    saveStudentLocations();
-    studentsVisible=true;
-    refreshStudents();
-
-    const plotted=parsed.length-missingCoords;
-    status.textContent=`Imported ${parsed.length} students. ${plotted} can be plotted now. ${missingCoords} are missing Latitude/Longitude.`;
-  };
-  reader.readAsText(file);
-};
-
-document.getElementById("toggleStudents").onclick=()=>{
+document.getElementById("importStudents").onclick=()=>{\n  const file=document.getElementById("studentCsv").files[0];\n  const status=document.getElementById("studentStatus");\n  if(!file){status.textContent="Choose a CSV file first.";return;}\n  const reader=new FileReader();\n  reader.onload=async e=>{\n    const lines=String(e.target.result||"").split(/\\r?\\n/).filter(x=>x.trim().length);\n    if(lines.length<2){status.textContent="The CSV does not contain student rows.";return;}\n    const headers=parseCsvLine(lines[0]).map(normalizeHeader);\n    const findIndex=(names)=>{for(const n of names){const i=headers.indexOf(normalizeHeader(n));if(i>=0)return i;}return -1;};\n    const idx={studentId:findIndex(["student id","studentid","id"]),address:findIndex(["address","home address","street address"]),city:findIndex(["city"]),state:findIndex(["state"]),zip:findIndex(["zip","zipcode","postal code"]),lat:findIndex(["latitude","lat"]),lng:findIndex(["longitude","lng","lon","long"])};\n    if(idx.studentId<0||idx.address<0){status.textContent="CSV needs Student ID and Address columns.";return;}\n    const rows=[];\n    for(let r=1;r<lines.length;r++){\n      const cols=parseCsvLine(lines[r]); const val=i=>i>=0?String(cols[i]??"").trim():"";\n      const lat=idx.lat>=0&&val(idx.lat)!==""?Number(val(idx.lat)):null;\n      const lng=idx.lng>=0&&val(idx.lng)!==""?Number(val(idx.lng)):null;\n      rows.push({student_id:val(idx.studentId),address:val(idx.address),city:val(idx.city)||"Highland Park",state:val(idx.state)||"MI",zip_code:val(idx.zip),latitude:Number.isFinite(lat)?lat:null,longitude:Number.isFinite(lng)?lng:null,active:true,updated_at:new Date().toISOString()});\n    }\n    status.textContent=`Uploading ${rows.length} address records...`;\n    const {error}=await supabaseClient.from("recruitment_students").upsert(rows,{onConflict:"student_id"});\n    if(error){status.textContent="Upload blocked. We need staff-only RLS policies before the site can write student addresses.";console.error(error);return;}\n    status.textContent=`Successfully saved ${rows.length} student address records to Supabase.`;\n    await loadStudentLocationsFromSupabase();\n  };\n  reader.readAsText(file);\n};\n\ndocument.getElementById("loadStudents").onclick=async()=>{await loadStudentLocationsFromSupabase();};\n\ndocument.getElementById("toggleStudents").onclick=()=>{
   studentsVisible=!studentsVisible;
   refreshStudents();
-};
-
-document.getElementById("clearStudents").onclick=()=>{
-  studentLocations=[];
-  studentsVisible=false;
-  try{localStorage.removeItem("gwcaStudentLocations");}catch(e){}
-  refreshStudents();
-  document.getElementById("studentStatus").textContent="Imported student locations cleared from this browser.";
 };
 
 </script>
