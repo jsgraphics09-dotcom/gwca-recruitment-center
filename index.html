@@ -94,6 +94,7 @@
     </div>
     <button id="fitBtn" class="secondary">Show All Active Stops</button>
     <button id="toggleCircles" class="primary">Hide Recruitment Circles</button>
+    <button id="recruitMode" class="secondary">Recruitment Mode: OFF</button>
   </div>
 
   <h3>Bus Stops</h3>
@@ -110,6 +111,7 @@
     <div><span class="dot" style="background:#f3c623"></span>Yellow Bus</div>
     <div><span class="dot" style="background:#2878d0"></span>Blue Bus</div>
     <div><span class="dot" style="background:#d83b3b"></span>Red Bus</div>
+    <div><span class="dot" style="background:#0a2446;border:2px solid #f47c00"></span>GWCA</div>
   </div>
 </div>
 </div>
@@ -144,8 +146,11 @@ const stops = [
 ];
 
 const colors={Yellow:"#f3c623",Blue:"#2878d0",Red:"#d83b3b"};
+const school={name:"George Washington Carver Academy",address:"14510 Second Ave., Highland Park, MI 48203",lng:-83.0979,lat:42.4058};
 let routeFilter="All";
 let circlesVisible=true;
+let recruitmentMode=false;
+let selectedStopName=null;
 
 const map = new maplibregl.Map({
   container:"map",
@@ -162,6 +167,14 @@ function gradeMatches(grades,band){
   if(band==="35") return norm.some(g=>["3","4","5"].includes(g));
   if(band==="68") return norm.some(g=>["6","7","8"].includes(g));
   return true;
+}
+
+function distanceMiles(aLat,aLng,bLat,bLng){
+  const R=3958.7613;
+  const toRad=d=>d*Math.PI/180;
+  const dLat=toRad(bLat-aLat), dLng=toRad(bLng-aLng);
+  const q=Math.sin(dLat/2)**2 + Math.cos(toRad(aLat))*Math.cos(toRad(bLat))*Math.sin(dLng/2)**2;
+  return 2*R*Math.asin(Math.sqrt(q));
 }
 
 function score(s){
@@ -192,12 +205,16 @@ function circlePolygon(lng,lat,radiusMiles,steps=64){
 
 function sourceData(){
   const r=Number(document.getElementById("radiusFilter").value);
-  const active=activeStops();
+  let active=activeStops();
   const markers=active.map((s,i)=>({
     type:"Feature",properties:{...s,id:i,score:score(s),color:colors[s.bus]},
     geometry:{type:"Point",coordinates:[s.lng,s.lat]}
   }));
-  const circles=active.map((s,i)=>({
+  let circleStops=active;
+  if(recruitmentMode && selectedStopName){
+    circleStops=active.filter(s=>s.name===selectedStopName);
+  }
+  const circles=circleStops.map((s,i)=>({
     type:"Feature",properties:{bus:s.bus,color:colors[s.bus],name:s.name},
     geometry:{type:"Polygon",coordinates:[circlePolygon(s.lng,s.lat,r)]}
   }));
@@ -219,15 +236,48 @@ function refresh(){
   [...active].sort((a,b)=>score(b)-score(a)).forEach(s=>{
     const el=document.createElement("div");
     el.className="stop";
+    const dist=distanceMiles(s.lat,s.lng,school.lat,school.lng).toFixed(1);
     el.innerHTML=`<div class="stop-top"><span>${s.name}</span><span class="score">${score(s)}</span></div>
-      <div class="small">${s.bus} Bus • ${s.count} scholars • Grades ${[...new Set(s.grades)].join(", ")}</div>`;
-    el.onclick=()=>map.flyTo({center:[s.lng,s.lat],zoom:14});
+      <div class="small">${s.bus} Bus • ${s.count} scholars • ${dist} mi from GWCA • Grades ${[...new Set(s.grades)].join(", ")}</div>`;
+    el.onclick=()=>{
+      selectedStopName=s.name;
+      map.flyTo({center:[s.lng,s.lat],zoom:14});
+      if(recruitmentMode) refresh();
+    };
     list.appendChild(el);
   });
 }
 
 map.on("load",()=>{
   const d=sourceData();
+
+  map.addSource("school",{type:"geojson",data:{
+    type:"FeatureCollection",
+    features:[{type:"Feature",properties:{name:school.name,address:school.address},geometry:{type:"Point",coordinates:[school.lng,school.lat]}}]
+  }});
+  map.addLayer({id:"school-ring",type:"circle",source:"school",paint:{
+    "circle-radius":18,
+    "circle-color":"#ffffff",
+    "circle-stroke-color":"#f47c00",
+    "circle-stroke-width":5
+  }});
+  map.addLayer({id:"school-core",type:"circle",source:"school",paint:{
+    "circle-radius":8,
+    "circle-color":"#0a2446",
+    "circle-stroke-color":"#ffffff",
+    "circle-stroke-width":2
+  }});
+
+  map.on("click","school-core",e=>{
+    new maplibregl.Popup()
+      .setLngLat([school.lng,school.lat])
+      .setHTML(`<div style="min-width:230px">
+        <div style="font-size:16px;font-weight:900;color:#0a2446">GWCA</div>
+        <div style="margin-top:4px">${school.name}</div>
+        <div style="font-size:12px;color:#6d7888;margin-top:4px">${school.address}</div>
+      </div>`)
+      .addTo(map);
+  });
   map.addSource("circles",{type:"geojson",data:d.circles});
   map.addLayer({id:"circle-fill",type:"fill",source:"circles",paint:{
     "fill-color":["get","color"],"fill-opacity":0.10}});
@@ -242,6 +292,8 @@ map.on("load",()=>{
 
   map.on("click","markers",e=>{
     const p=e.features[0].properties;
+    selectedStopName=p.name;
+    if(recruitmentMode) refresh();
     const grades=JSON.parse(p.grades || "[]");
     new maplibregl.Popup()
       .setLngLat(e.lngLat)
@@ -250,6 +302,7 @@ map.on("load",()=>{
         <div style="margin:5px 0;font-weight:800;color:${p.color}">${p.bus} Bus</div>
         <div><b>Current scholars:</b> ${p.count}</div>
         <div><b>Grades:</b> ${grades.join(", ")}</div>
+        <div><b>Distance to GWCA:</b> ${distanceMiles(e.lngLat.lat,e.lngLat.lng,school.lat,school.lng).toFixed(1)} miles</div>
         <div><b>Recruitment score:</b> ${p.score}/100</div>
       </div>`)
       .addTo(map);
@@ -273,6 +326,7 @@ document.getElementById("fitBtn").onclick=()=>{
   if(!active.length)return;
   const b=new maplibregl.LngLatBounds();
   active.forEach(s=>b.extend([s.lng,s.lat]));
+  b.extend([school.lng,school.lat]);
   map.fitBounds(b,{padding:60,maxZoom:13});
 };
 
@@ -282,6 +336,13 @@ document.getElementById("toggleCircles").onclick=()=>{
   map.setLayoutProperty("circle-fill","visibility",vis);
   map.setLayoutProperty("circle-line","visibility",vis);
   document.getElementById("toggleCircles").textContent=circlesVisible?"Hide Recruitment Circles":"Show Recruitment Circles";
+};
+
+document.getElementById("recruitMode").onclick=()=>{
+  recruitmentMode=!recruitmentMode;
+  if(!recruitmentMode) selectedStopName=null;
+  document.getElementById("recruitMode").textContent=recruitmentMode?"Recruitment Mode: ON":"Recruitment Mode: OFF";
+  refresh();
 };
 </script>
 </body>
