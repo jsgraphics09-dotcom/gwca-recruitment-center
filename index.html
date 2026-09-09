@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>GWCA Recruitment Center</title>
+  <link href="https://unpkg.com/maplibre-gl@5.6.2/dist/maplibre-gl.css" rel="stylesheet"/>
+  <style>
+    :root{
+      --navy:#0a2446; --navy2:#123b70; --orange:#f47c00; --bg:#f4f7fb; --text:#172033;
+      --muted:#6d7888; --line:#dfe6ef; --yellow:#f3c623; --blue:#2878d0; --red:#d83b3b;
+      --green:#248b5a; --white:#fff;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:var(--text)}
+    header{height:78px;background:linear-gradient(135deg,var(--navy),var(--navy2));color:#fff;
+      display:flex;align-items:center;justify-content:space-between;padding:0 22px;box-shadow:0 3px 16px rgba(0,0,0,.18);z-index:5}
+    .brand h1{margin:0;font-size:24px}.brand p{margin:4px 0 0;font-size:12px;color:#dbe7f6}
+    .badge{background:var(--orange);font-weight:900;border-radius:999px;padding:9px 13px;font-size:12px}
+    .app{display:grid;grid-template-columns:350px 1fr;min-height:calc(100vh - 78px)}
+    aside{background:#fff;border-right:1px solid var(--line);padding:16px;overflow:auto}
+    #map{height:calc(100vh - 78px);min-height:650px}
+    .stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
+    .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:13px;box-shadow:0 2px 10px rgba(16,42,67,.05)}
+    .stat strong{display:block;font-size:26px;color:var(--navy)}.stat span{font-size:11px;color:var(--muted)}
+    h3{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin:18px 0 9px}
+    label{display:block;font-size:11px;font-weight:800;color:var(--muted);margin-bottom:5px}
+    select,button{width:100%;padding:10px;border:1px solid #d3dce8;border-radius:10px;background:#fff;font:inherit}
+    button{cursor:pointer;font-weight:800}
+    .route-row{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+    .route-btn.active{background:var(--navy);color:#fff;border-color:var(--navy)}
+    .controls{display:grid;gap:10px}
+    .primary{background:var(--orange);color:#fff;border:none}
+    .secondary{background:var(--navy);color:#fff;border:none}
+    .stop-list{display:grid;gap:8px;max-height:350px;overflow:auto}
+    .stop{padding:10px;border:1px solid var(--line);border-radius:11px;cursor:pointer}
+    .stop:hover{background:#f8fbff;border-color:#b8c5d8}
+    .stop-top{display:flex;justify-content:space-between;gap:8px;font-size:13px;font-weight:900}
+    .small{font-size:11px;color:var(--muted);margin-top:4px}
+    .score{color:var(--orange)}
+    .note{font-size:11px;line-height:1.4;padding:10px;border-radius:10px;background:#fff7ea;border:1px solid #ffd9a8;color:#704214;margin-top:14px}
+    .maplibregl-popup-content{border-radius:12px;padding:14px}
+    .legend{position:absolute;right:14px;top:92px;z-index:3;background:#fff;border-radius:12px;padding:10px 12px;
+      box-shadow:0 3px 16px rgba(0,0,0,.14);font-size:12px;line-height:1.7}
+    .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
+    @media(max-width:900px){.app{grid-template-columns:1fr}#map{height:65vh;min-height:500px}.legend{top:auto;bottom:15px}}
+  </style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <h1>GWCA Recruitment Center</h1>
+    <p>Student Recruitment Intelligence • Transportation Coverage • Target Areas</p>
+  </div>
+  <div class="badge">CARVER LIONS</div>
+</header>
+
+<div class="app">
+<aside>
+  <div class="stats">
+    <div class="card stat"><strong id="scholarCount">87</strong><span>Bus Scholars</span></div>
+    <div class="card stat"><strong id="stopCount">20</strong><span>Unique Stops</span></div>
+    <div class="card stat"><strong id="routeCount">3</strong><span>Bus Routes</span></div>
+    <div class="card stat"><strong id="priorityCount">0</strong><span>Priority Zones</span></div>
+  </div>
+
+  <h3>Map Filters</h3>
+  <div class="controls">
+    <div>
+      <label>Bus Route</label>
+      <div class="route-row">
+        <button class="route-btn active" data-route="All">All</button>
+        <button class="route-btn" data-route="Yellow">Y</button>
+        <button class="route-btn" data-route="Blue">B</button>
+        <button class="route-btn" data-route="Red">R</button>
+      </div>
+    </div>
+    <div>
+      <label>Grade Band</label>
+      <select id="gradeFilter">
+        <option value="All">All Grades</option>
+        <option value="PK2">Pre-K–2</option>
+        <option value="35">3–5</option>
+        <option value="68">6–8</option>
+      </select>
+    </div>
+    <div>
+      <label>Recruitment Radius</label>
+      <select id="radiusFilter">
+        <option value="0.5">½ Mile</option>
+        <option value="1" selected>1 Mile</option>
+        <option value="2">2 Miles</option>
+      </select>
+    </div>
+    <button id="fitBtn" class="secondary">Show All Active Stops</button>
+    <button id="toggleCircles" class="primary">Hide Recruitment Circles</button>
+  </div>
+
+  <h3>Bus Stops</h3>
+  <div id="stopList" class="stop-list"></div>
+
+  <div class="note">
+    Version 1 uses starter intersection coordinates. Verify stop coordinates before making final recruitment or transportation decisions.
+  </div>
+</aside>
+
+<div style="position:relative">
+  <div id="map"></div>
+  <div class="legend">
+    <div><span class="dot" style="background:#f3c623"></span>Yellow Bus</div>
+    <div><span class="dot" style="background:#2878d0"></span>Blue Bus</div>
+    <div><span class="dot" style="background:#d83b3b"></span>Red Bus</div>
+  </div>
+</div>
+</div>
+
+<script src="https://unpkg.com/maplibre-gl@5.6.2/dist/maplibre-gl.js"></script>
+<script>
+const stops = [
+  {name:"John R / Nevada", bus:"Yellow", count:9, grades:["Pre-K","K","4","5","6","7","8"], lng:-83.1035,lat:42.4209},
+  {name:"Florence / Woodward", bus:"Yellow", count:3, grades:["Pre-K","3","6"], lng:-83.1024,lat:42.4098},
+  {name:"Nevada / Dequindre", bus:"Yellow", count:5, grades:["K","2","3","4","5"], lng:-83.0837,lat:42.4300},
+  {name:"John R / Candler", bus:"Yellow", count:5, grades:["1","4","8"], lng:-83.1020,lat:42.4135},
+  {name:"State Fair / Russell", bus:"Yellow", count:3, grades:["2","5","8"], lng:-83.0730,lat:42.4390},
+  {name:"Hamilton / 6 Mile", bus:"Yellow", count:12, grades:["2","3","4","5","6","8"], lng:-83.1120,lat:42.4180},
+  {name:"Woodward / Glendale", bus:"Yellow", count:4, grades:["3","5","8"], lng:-83.0974,lat:42.4087},
+  {name:"Chicago / Greenfield", bus:"Yellow", count:1, grades:["3"], lng:-83.1970,lat:42.3649},
+
+  {name:"Euclid / 14th", bus:"Blue", count:4, grades:["Pre-K","3","6","8"], lng:-83.0919,lat:42.3773},
+  {name:"Cortland / Monica", bus:"Blue", count:2, grades:["2","8"], lng:-83.1535,lat:42.3890},
+  {name:"Manchester / 3rd", bus:"Blue", count:3, grades:["2","4","5"], lng:-83.1004,lat:42.4022},
+  {name:"Euclid / Second", bus:"Blue", count:1, grades:["2"], lng:-83.0795,lat:42.3738},
+  {name:"Glendale / Hamilton", bus:"Blue", count:2, grades:["3","8"], lng:-83.1110,lat:42.4070},
+  {name:"Woodward / Glendale", bus:"Blue", count:3, grades:["3","5"], lng:-83.0974,lat:42.4087},
+  {name:"Linwood / Euclid", bus:"Blue", count:1, grades:["8"], lng:-83.1140,lat:42.3790},
+
+  {name:"7 Mile / Wyoming", bus:"Red", count:5, grades:["Pre-K","K","3","6"], lng:-83.1590,lat:42.4316},
+  {name:"Wyoming / 8 Mile", bus:"Red", count:5, grades:["Pre-K","K","1","7"], lng:-83.1588,lat:42.4460},
+  {name:"7 Mile / Archdale", bus:"Red", count:7, grades:["K","2","3","4","5","7"], lng:-83.2122,lat:42.4319},
+  {name:"Chicago / Greenfield", bus:"Red", count:4, grades:["K","2","4","5"], lng:-83.1970,lat:42.3649},
+  {name:"Outer Drive / Mansfield", bus:"Red", count:2, grades:["1","5"], lng:-83.2190,lat:42.4150},
+  {name:"Joy Road / Southfield", bus:"Red", count:2, grades:["1","5"], lng:-83.2180,lat:42.3590},
+  {name:"Grand River / Schaefer", bus:"Red", count:4, grades:["4","5","7"], lng:-83.1806,lat:42.3892}
+];
+
+const colors={Yellow:"#f3c623",Blue:"#2878d0",Red:"#d83b3b"};
+let routeFilter="All";
+let circlesVisible=true;
+
+const map = new maplibregl.Map({
+  container:"map",
+  style:"https://tiles.openfreemap.org/styles/liberty",
+  center:[-83.145,42.405],
+  zoom:10.8
+});
+map.addControl(new maplibregl.NavigationControl({showCompass:false}), "bottom-right");
+
+function gradeMatches(grades,band){
+  if(band==="All") return true;
+  const norm=grades.map(g=>String(g).toLowerCase().replace("pre-k","pk").replace("kindergarten","k"));
+  if(band==="PK2") return norm.some(g=>["pk","k","1","2"].includes(g));
+  if(band==="35") return norm.some(g=>["3","4","5"].includes(g));
+  if(band==="68") return norm.some(g=>["6","7","8"].includes(g));
+  return true;
+}
+
+function score(s){
+  const countScore=Math.min(s.count*4,60);
+  const gradeScore=Math.min(new Set(s.grades).size*5,25);
+  const shared=stops.filter(x=>x.name===s.name).length>1?15:0;
+  return Math.min(100,countScore+gradeScore+shared);
+}
+
+function activeStops(){
+  const band=document.getElementById("gradeFilter").value;
+  return stops.filter(s=>(routeFilter==="All"||s.bus===routeFilter)&&gradeMatches(s.grades,band));
+}
+
+function circlePolygon(lng,lat,radiusMiles,steps=64){
+  const km=radiusMiles*1.609344, coords=[];
+  const earth=6371;
+  const latRad=lat*Math.PI/180;
+  for(let i=0;i<=steps;i++){
+    const brg=2*Math.PI*i/steps;
+    const d=km/earth;
+    const lat2=Math.asin(Math.sin(latRad)*Math.cos(d)+Math.cos(latRad)*Math.sin(d)*Math.cos(brg));
+    const lon2=(lng*Math.PI/180)+Math.atan2(Math.sin(brg)*Math.sin(d)*Math.cos(latRad),Math.cos(d)-Math.sin(latRad)*Math.sin(lat2));
+    coords.push([lon2*180/Math.PI,lat2*180/Math.PI]);
+  }
+  return coords;
+}
+
+function sourceData(){
+  const r=Number(document.getElementById("radiusFilter").value);
+  const active=activeStops();
+  const markers=active.map((s,i)=>({
+    type:"Feature",properties:{...s,id:i,score:score(s),color:colors[s.bus]},
+    geometry:{type:"Point",coordinates:[s.lng,s.lat]}
+  }));
+  const circles=active.map((s,i)=>({
+    type:"Feature",properties:{bus:s.bus,color:colors[s.bus],name:s.name},
+    geometry:{type:"Polygon",coordinates:[circlePolygon(s.lng,s.lat,r)]}
+  }));
+  return {markers:{type:"FeatureCollection",features:markers},circles:{type:"FeatureCollection",features:circles}};
+}
+
+function refresh(){
+  const d=sourceData();
+  if(map.getSource("markers")) map.getSource("markers").setData(d.markers);
+  if(map.getSource("circles")) map.getSource("circles").setData(d.circles);
+
+  const active=activeStops();
+  document.getElementById("scholarCount").textContent=active.reduce((a,b)=>a+b.count,0);
+  document.getElementById("stopCount").textContent=new Set(active.map(x=>x.name)).size;
+  document.getElementById("priorityCount").textContent=active.filter(x=>score(x)>=70).length;
+
+  const list=document.getElementById("stopList");
+  list.innerHTML="";
+  [...active].sort((a,b)=>score(b)-score(a)).forEach(s=>{
+    const el=document.createElement("div");
+    el.className="stop";
+    el.innerHTML=`<div class="stop-top"><span>${s.name}</span><span class="score">${score(s)}</span></div>
+      <div class="small">${s.bus} Bus • ${s.count} scholars • Grades ${[...new Set(s.grades)].join(", ")}</div>`;
+    el.onclick=()=>map.flyTo({center:[s.lng,s.lat],zoom:14});
+    list.appendChild(el);
+  });
+}
+
+map.on("load",()=>{
+  const d=sourceData();
+  map.addSource("circles",{type:"geojson",data:d.circles});
+  map.addLayer({id:"circle-fill",type:"fill",source:"circles",paint:{
+    "fill-color":["get","color"],"fill-opacity":0.10}});
+  map.addLayer({id:"circle-line",type:"line",source:"circles",paint:{
+    "line-color":["get","color"],"line-width":2}});
+
+  map.addSource("markers",{type:"geojson",data:d.markers});
+  map.addLayer({id:"markers",type:"circle",source:"markers",paint:{
+    "circle-radius":["interpolate",["linear"],["get","count"],1,7,12,13],
+    "circle-color":["get","color"],"circle-stroke-color":"#0a2446","circle-stroke-width":2
+  }});
+
+  map.on("click","markers",e=>{
+    const p=e.features[0].properties;
+    const grades=JSON.parse(p.grades || "[]");
+    new maplibregl.Popup()
+      .setLngLat(e.lngLat)
+      .setHTML(`<div style="min-width:220px">
+        <div style="font-size:16px;font-weight:900;color:#0a2446">${p.name}</div>
+        <div style="margin:5px 0;font-weight:800;color:${p.color}">${p.bus} Bus</div>
+        <div><b>Current scholars:</b> ${p.count}</div>
+        <div><b>Grades:</b> ${grades.join(", ")}</div>
+        <div><b>Recruitment score:</b> ${p.score}/100</div>
+      </div>`)
+      .addTo(map);
+  });
+  map.on("mouseenter","markers",()=>map.getCanvas().style.cursor="pointer");
+  map.on("mouseleave","markers",()=>map.getCanvas().style.cursor="");
+  refresh();
+});
+
+document.querySelectorAll(".route-btn").forEach(btn=>btn.onclick=()=>{
+  routeFilter=btn.dataset.route;
+  document.querySelectorAll(".route-btn").forEach(x=>x.classList.remove("active"));
+  btn.classList.add("active");
+  refresh();
+});
+document.getElementById("gradeFilter").onchange=refresh;
+document.getElementById("radiusFilter").onchange=refresh;
+
+document.getElementById("fitBtn").onclick=()=>{
+  const active=activeStops();
+  if(!active.length)return;
+  const b=new maplibregl.LngLatBounds();
+  active.forEach(s=>b.extend([s.lng,s.lat]));
+  map.fitBounds(b,{padding:60,maxZoom:13});
+};
+
+document.getElementById("toggleCircles").onclick=()=>{
+  circlesVisible=!circlesVisible;
+  const vis=circlesVisible?"visible":"none";
+  map.setLayoutProperty("circle-fill","visibility",vis);
+  map.setLayoutProperty("circle-line","visibility",vis);
+  document.getElementById("toggleCircles").textContent=circlesVisible?"Hide Recruitment Circles":"Show Recruitment Circles";
+};
+</script>
+</body>
+</html>
