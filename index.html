@@ -127,7 +127,7 @@
   <div class="card disabled-card" id="studentToolsCard">
     <label>Upload Student Address CSV</label>
     <input type="file" id="studentCsv" accept=".csv" style="width:100%;font-size:12px"/>
-    <div class="small" style="margin-top:6px">Columns: Student ID, Address, City, State, ZIP. Latitude/Longitude are optional.</div>
+    <div class="small" style="margin-top:6px">Accepts GWCA roster columns including Student Number, First Name, Last Name, Street, City and ZIP. Latitude/Longitude are optional.</div>
     <button id="importStudents" class="secondary" style="margin-top:9px">Import Addresses to Supabase</button>
     <button id="loadStudents" style="margin-top:7px">Load Student Locations</button>
     <button id="toggleStudents" style="margin-top:7px">Show Student Locations</button>
@@ -517,8 +517,10 @@ document.getElementById("importStudents").onclick=()=>{
     };
 
     const idx={
-      studentId:findIndex(["student id","studentid","id"]),
-      address:findIndex(["address","home address","street address"]),
+      studentId:findIndex(["student id","studentid","student number","studentnumber","student no","student #","id"]),
+      firstName:findIndex(["first name","firstname","first"]),
+      lastName:findIndex(["last name","lastname","last"]),
+      address:findIndex(["address","home address","street address","street"]),
       city:findIndex(["city"]),
       state:findIndex(["state"]),
       zip:findIndex(["zip","zipcode","postal code"]),
@@ -531,49 +533,143 @@ document.getElementById("importStudents").onclick=()=>{
       return;
     }
 
-    const rows=[];
+    const candidates=[];
+    let missingAddress=0;
+
     for(let r=1;r<lines.length;r++){
       const cols=parseCsvLine(lines[r]);
       const val=i=>i>=0 ? String(cols[i]??"").trim() : "";
       const studentId=val(idx.studentId);
       const address=val(idx.address);
-      if(!studentId || !address) continue;
+
+      if(!studentId) continue;
+      if(!address){
+        missingAddress++;
+        continue;
+      }
 
       const latRaw=val(idx.lat);
       const lngRaw=val(idx.lng);
       const lat=latRaw!=="" ? Number(latRaw) : null;
       const lng=lngRaw!=="" ? Number(lngRaw) : null;
 
-      rows.push({
+      candidates.push({
         student_id:studentId,
-        address:address,
+        first_name:val(idx.firstName),
+        last_name:val(idx.lastName),
+        address,
         city:val(idx.city)||"Highland Park",
         state:val(idx.state)||"MI",
         zip_code:val(idx.zip),
         latitude:Number.isFinite(lat)?lat:null,
-        longitude:Number.isFinite(lng)?lng:null,
-        active:true,
-        updated_at:new Date().toISOString()
+        longitude:Number.isFinite(lng)?lng:null
       });
     }
 
-    if(!rows.length){
-      status.textContent="No valid address rows were found.";
+    if(!candidates.length){
+      status.textContent=`No valid address rows found. ${missingAddress} rows were missing an address.`;
       return;
     }
 
-    status.textContent=`Uploading ${rows.length} address records...`;
-    const {error}=await supabaseClient
-      .from("recruitment_students")
-      .upsert(rows,{onConflict:"student_id"});
+    status.textContent=`Checking ${candidates.length} Student IDs against the GWCA scholar roster...`;
 
-    if(error){
-      status.textContent="Upload failed: " + error.message;
-      console.error(error);
-      return;
+    // Read valid scholar IDs in pages so a large roster is handled safely.
+    const validIds=new Set();
+    const PAGE=500;
+    for(let from=0;;from+=PAGE){
+      const {data:scholars,error:scholarError}=await supabaseClient
+        .from("scholars")
+        .select("student_id")
+        .range(from,from+PAGE-1);
+
+      if(scholarError){
+        status.textContent="Could not validate Student IDs: " + scholarError.message;
+        return;
+      }
+
+      (scholars||[]).forEach(s=>validIds.add(String(s.student_id).trim()));
+      if(!scholars || scholars.length<PAGE) break;
     }
 
-    status.textContent=`Saved ${rows.length} student address records to Supabase.`;
+    const validRows=[];
+    const notFound=[];
+
+    for(const c of candidates){
+      if(validIds.has(String(c.student_id).trim())){
+        validRows.push({
+          student_id:String(c.student_id).trim(),
+          address:c.address,
+          city:c.city,
+          state:c.state,
+          zip_code:c.zip_code,
+          latitude:c.latitude,
+          longitude:c.longitude,
+          active:true,
+          updated_at:new Date().toISOString()
+        });
+      }else{
+        notFound.push({
+          student_id:c.student_id,
+          name:[c.first_name,c.last_name].filter(Boolean).join(" ")
+        });
+      }
+    }
+
+    let imported=0;
+    const failed=[];
+    const BATCH=75;
+
+    status.textContent=`Importing ${validRows.length} matched address records...`;
+
+    for(let i=0;i<validRows.length;i+=BATCH){
+      const batch=validRows.slice(i,i+BATCH);
+      const {error}=await supabaseClient
+        .from("recruitment_students")
+        .upsert(batch,{onConflict:"student_id"});
+
+      if(error){
+        // If a batch fails, retry each record so one problem cannot block the rest.
+        for(const row of batch){
+          const {error:rowError}=await supabaseClient
+            .from("recruitment_students")
+            .upsert(row,{onConflict:"student_id"});
+          if(rowError) failed.push({student_id:row.student_id,error:rowError.message});
+          else imported++;
+        }
+      }else{
+        imported+=batch.length;
+      }
+    }
+
+    let summary=`Imported ${imported} addresses.`;
+    summary+=` ${missingAddress} skipped for missing address.`;
+    summary+=` ${notFound.length} skipped because Student ID was not found.`;
+    if(failed.length) summary+=` ${failed.length} failed during upload.`;
+
+    status.innerHTML=`<b>${summary}</b>`;
+
+    if(notFound.length || failed.length){
+      const details=document.createElement("details");
+      details.style.marginTop="8px";
+      const summaryEl=document.createElement("summary");
+      summaryEl.textContent="View skipped / failed records";
+      summaryEl.style.cursor="pointer";
+      details.appendChild(summaryEl);
+
+      const pre=document.createElement("div");
+      pre.style.fontSize="11px";
+      pre.style.marginTop="6px";
+      pre.style.maxHeight="180px";
+      pre.style.overflow="auto";
+
+      const linesOut=[];
+      notFound.forEach(x=>linesOut.push(`Not found: ${x.student_id}${x.name ? " — "+x.name : ""}`));
+      failed.forEach(x=>linesOut.push(`Upload failed: ${x.student_id} — ${x.error}`));
+      pre.textContent=linesOut.join("\n");
+      details.appendChild(pre);
+      status.appendChild(details);
+    }
+
     await loadStudentLocationsFromSupabase();
   };
 
