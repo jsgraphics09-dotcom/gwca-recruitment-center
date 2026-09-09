@@ -48,11 +48,10 @@
     @media(max-width:900px){.app{grid-template-columns:1fr}#map{height:65vh;min-height:500px}.legend{top:auto;bottom:15px}}
   
 .auth-card{background:#fff;border:1px solid #dbe1ea;border-radius:12px;padding:12px;margin-bottom:12px}
-.auth-row{display:grid;grid-template-columns:1fr;gap:7px}
-.auth-row input{width:100%;padding:9px;border:1px solid #cfd6e0;border-radius:8px;font-size:12px}
-.auth-status{font-size:11px;margin-top:7px;color:#566273}
+.auth-card input{width:100%;box-sizing:border-box;padding:9px;margin-top:7px;border:1px solid #cfd6e0;border-radius:8px;font-size:12px}
+.auth-status{font-size:11px;line-height:1.4;margin-top:8px;color:#566273}
 .hidden{display:none!important}
-
+.disabled-card{opacity:.45;pointer-events:none}
 </style>
 </head>
 <body>
@@ -107,40 +106,39 @@
   </div>
 
 
-  
+
   <h3>Staff Access</h3>
   <div class="auth-card">
     <div id="signedOutPanel">
-      <div class="auth-row">
-        <input id="loginEmail" type="email" placeholder="Staff email">
-        <input id="loginPassword" type="password" placeholder="Password">
-        <button id="loginBtn" class="primary">Sign In</button>
-      </div>
-      <div id="authStatus" class="auth-status">Sign in with your existing GWCA Transportation staff account.</div>
+      <div class="small">Use your existing GWCA Transportation staff login.</div>
+      <input id="loginEmail" type="email" placeholder="Staff email" autocomplete="username">
+      <input id="loginPassword" type="password" placeholder="Password" autocomplete="current-password">
+      <button id="loginBtn" class="primary" style="margin-top:9px">Sign In</button>
+      <div id="authStatus" class="auth-status">Not signed in.</div>
     </div>
     <div id="signedInPanel" class="hidden">
-      <div><b id="signedInName">Signed in</b></div>
-      <div id="signedInEmail" class="small"></div>
-      <button id="logoutBtn" style="margin-top:8px">Sign Out</button>
+      <div><b>Signed in</b></div>
+      <div id="signedInEmail" class="small" style="margin-top:4px"></div>
+      <button id="logoutBtn" style="margin-top:9px">Sign Out</button>
     </div>
   </div>
 
   <h3>Current Student Locations</h3>
-  <div class="card" id="studentToolsCard">
+  <div class="card disabled-card" id="studentToolsCard">
     <label>Upload Student Address CSV</label>
     <input type="file" id="studentCsv" accept=".csv" style="width:100%;font-size:12px"/>
-    <div class="small" style="margin-top:6px">Columns: Student ID, Address, City, State, ZIP. Optional: Latitude, Longitude.</div>
+    <div class="small" style="margin-top:6px">Columns: Student ID, Address, City, State, ZIP. Latitude/Longitude are optional.</div>
     <button id="importStudents" class="secondary" style="margin-top:9px">Import Addresses to Supabase</button>
     <button id="loadStudents" style="margin-top:7px">Load Student Locations</button>
     <button id="toggleStudents" style="margin-top:7px">Show Student Locations</button>
-    <div id="studentStatus" class="upload-status">No student location file loaded.</div>
+        <div id="studentStatus" class="upload-status">No student location file loaded.</div>
   </div>
 
   <h3>Bus Stops</h3>
   <div id="stopList" class="stop-list"></div>
 
   <div class="note">
-    Bus-stop coordinates are starter coordinates. Student address uploads stay in this browser only. Do not commit student-address files to GitHub.
+    Student address files are not stored in GitHub. Access to student location data requires an authenticated GWCA staff account.
   </div>
 </aside>
 
@@ -156,180 +154,8 @@
 </div>
 </div>
 
-<script src="https://unpkg.com/maplibre-gl@5.6.2/dist/maplibre-gl.js">
-let currentStaff=null;
-
-async function loadStaffProfile(user){
-  const {data,error}=await supabaseClient
-    .from("staff")
-    .select("display_name,email,role,active")
-    .eq("auth_user_id",user.id)
-    .maybeSingle();
-
-  if(error || !data || data.active !== true){
-    currentStaff=null;
-    return false;
-  }
-  currentStaff=data;
-  return true;
-}
-
-function setProtectedUi(signedIn){
-  const out=document.getElementById("signedOutPanel");
-  const inn=document.getElementById("signedInPanel");
-  const tools=document.getElementById("studentToolsCard");
-  if(out) out.classList.toggle("hidden",signedIn);
-  if(inn) inn.classList.toggle("hidden",!signedIn);
-  if(tools) tools.style.opacity=signedIn?"1":"0.45";
-  if(tools) tools.style.pointerEvents=signedIn?"auto":"none";
-}
-
-async function applySession(session){
-  const status=document.getElementById("authStatus");
-  if(!session?.user){
-    currentStaff=null;
-    setProtectedUi(false);
-    if(status) status.textContent="Sign in with your existing GWCA Transportation staff account.";
-    return;
-  }
-
-  const ok=await loadStaffProfile(session.user);
-  if(!ok){
-    await supabaseClient.auth.signOut();
-    setProtectedUi(false);
-    if(status) status.textContent="This account is not an active GWCA staff account.";
-    return;
-  }
-
-  setProtectedUi(true);
-  const name=document.getElementById("signedInName");
-  const email=document.getElementById("signedInEmail");
-  if(name) name.textContent=currentStaff.display_name || "GWCA Staff";
-  if(email) email.textContent=`${currentStaff.email || session.user.email} • ${currentStaff.role || "staff"}`;
-
-  if(typeof loadStudentLocationsFromSupabase === "function"){
-    await loadStudentLocationsFromSupabase();
-  }
-}
-
-async function initAuth(){
-  const {data:{session}}=await supabaseClient.auth.getSession();
-  await applySession(session);
-  supabaseClient.auth.onAuthStateChange(async (_event,newSession)=>{
-    await applySession(newSession);
-  });
-}
-
-document.getElementById("loginBtn")?.addEventListener("click",async()=>{
-  const email=document.getElementById("loginEmail").value.trim();
-  const password=document.getElementById("loginPassword").value;
-  const status=document.getElementById("authStatus");
-  if(!email || !password){
-    status.textContent="Enter your staff email and password.";
-    return;
-  }
-  status.textContent="Signing in...";
-  const {error}=await supabaseClient.auth.signInWithPassword({email,password});
-  if(error){
-    status.textContent=error.message || "Sign-in failed.";
-  }
-});
-
-document.getElementById("logoutBtn")?.addEventListener("click",async()=>{
-  await supabaseClient.auth.signOut();
-  studentLocations=[];
-  studentsVisible=false;
-  if(typeof refreshStudents === "function") refreshStudents();
-});
-
-</script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2">
-let currentStaff=null;
-
-async function loadStaffProfile(user){
-  const {data,error}=await supabaseClient
-    .from("staff")
-    .select("display_name,email,role,active")
-    .eq("auth_user_id",user.id)
-    .maybeSingle();
-
-  if(error || !data || data.active !== true){
-    currentStaff=null;
-    return false;
-  }
-  currentStaff=data;
-  return true;
-}
-
-function setProtectedUi(signedIn){
-  const out=document.getElementById("signedOutPanel");
-  const inn=document.getElementById("signedInPanel");
-  const tools=document.getElementById("studentToolsCard");
-  if(out) out.classList.toggle("hidden",signedIn);
-  if(inn) inn.classList.toggle("hidden",!signedIn);
-  if(tools) tools.style.opacity=signedIn?"1":"0.45";
-  if(tools) tools.style.pointerEvents=signedIn?"auto":"none";
-}
-
-async function applySession(session){
-  const status=document.getElementById("authStatus");
-  if(!session?.user){
-    currentStaff=null;
-    setProtectedUi(false);
-    if(status) status.textContent="Sign in with your existing GWCA Transportation staff account.";
-    return;
-  }
-
-  const ok=await loadStaffProfile(session.user);
-  if(!ok){
-    await supabaseClient.auth.signOut();
-    setProtectedUi(false);
-    if(status) status.textContent="This account is not an active GWCA staff account.";
-    return;
-  }
-
-  setProtectedUi(true);
-  const name=document.getElementById("signedInName");
-  const email=document.getElementById("signedInEmail");
-  if(name) name.textContent=currentStaff.display_name || "GWCA Staff";
-  if(email) email.textContent=`${currentStaff.email || session.user.email} • ${currentStaff.role || "staff"}`;
-
-  if(typeof loadStudentLocationsFromSupabase === "function"){
-    await loadStudentLocationsFromSupabase();
-  }
-}
-
-async function initAuth(){
-  const {data:{session}}=await supabaseClient.auth.getSession();
-  await applySession(session);
-  supabaseClient.auth.onAuthStateChange(async (_event,newSession)=>{
-    await applySession(newSession);
-  });
-}
-
-document.getElementById("loginBtn")?.addEventListener("click",async()=>{
-  const email=document.getElementById("loginEmail").value.trim();
-  const password=document.getElementById("loginPassword").value;
-  const status=document.getElementById("authStatus");
-  if(!email || !password){
-    status.textContent="Enter your staff email and password.";
-    return;
-  }
-  status.textContent="Signing in...";
-  const {error}=await supabaseClient.auth.signInWithPassword({email,password});
-  if(error){
-    status.textContent=error.message || "Sign-in failed.";
-  }
-});
-
-document.getElementById("logoutBtn")?.addEventListener("click",async()=>{
-  await supabaseClient.auth.signOut();
-  studentLocations=[];
-  studentsVisible=false;
-  if(typeof refreshStudents === "function") refreshStudents();
-});
-
-</script>
+<script src="https://unpkg.com/maplibre-gl@5.6.2/dist/maplibre-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const stops = [
   {name:"John R / Nevada", bus:"Yellow", count:9, grades:["Pre-K","K","4","5","6","7","8"], lng:-83.1035,lat:42.4209},
@@ -369,6 +195,7 @@ let studentLocations=[];
 const SUPABASE_URL="https://ftlskxbiacprefyrkhma.supabase.co";
 const SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ0bHNreGJpYWNwcmVmeXJraG1hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgyOTY0MjEsImV4cCI6MjEwMzg3MjQyMX0.NzYw4xUX3Wj_ydKZED7mY0-HxX_phESnXfix-BmBK_M";
 const supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+let currentSession=null;
 
 const map = new maplibregl.Map({
   container:"map",
@@ -498,22 +325,35 @@ function studentGeoJSON(){
   };
 }
 
-async function testDatabase(){
-  const el=document.getElementById("dbStatus");
-  try{
-    const {error}=await supabaseClient.from("recruitment_students").select("student_id").limit(1);
-    el.textContent=error?"Database connected; student data access is protected by RLS.":"Database connected.";
-  }catch(e){el.textContent="Database connection failed.";}
-}
 
 async function loadStudentLocationsFromSupabase(){
   const status=document.getElementById("studentStatus");
   status.textContent="Loading student locations...";
-  const {data,error}=await supabaseClient.from("recruitment_student_map").select("student_id,first_name,last_name,grade,address,city,state,zip_code,latitude,longitude").not("latitude","is",null).not("longitude","is",null);
-  if(error){status.textContent="Could not load student locations. Staff RLS access is not enabled yet.";return;}
-  studentLocations=(data||[]).map(r=>({studentId:r.student_id,scholar:[r.first_name,r.last_name].filter(Boolean).join(" "),grade:r.grade||"",address:r.address||"",city:r.city||"",state:r.state||"",zip:r.zip_code||"",lat:Number(r.latitude),lng:Number(r.longitude)})).filter(s=>Number.isFinite(s.lat)&&Number.isFinite(s.lng));
+  const {data,error}=await supabaseClient
+    .from("recruitment_student_map")
+    .select("student_id,first_name,last_name,grade,address,city,state,zip_code,latitude,longitude")
+    .not("latitude","is",null)
+    .not("longitude","is",null);
+
+  if(error){
+    status.textContent="Could not load student locations: " + error.message;
+    return;
+  }
+
+  studentLocations=(data||[]).map(r=>({
+    studentId:r.student_id,
+    scholar:[r.first_name,r.last_name].filter(Boolean).join(" "),
+    grade:r.grade||"",
+    address:r.address||"",
+    city:r.city||"",
+    state:r.state||"",
+    zip:r.zip_code||"",
+    lat:Number(r.latitude),
+    lng:Number(r.longitude)
+  })).filter(s=>Number.isFinite(s.lat)&&Number.isFinite(s.lng));
+
   refreshStudents();
-  status.textContent=`Loaded ${studentLocations.length} student locations from Supabase.`;
+  status.textContent=`Loaded ${studentLocations.length} mapped student locations.`;
 }
 
 function refreshStudents(){
@@ -610,8 +450,6 @@ map.on("load",()=>{
   map.on("mouseleave","markers",()=>map.getCanvas().style.cursor="");
   refresh();
   refreshStudents();
-  testDatabase();
-  initAuth();
 });
 
 document.querySelectorAll(".route-btn").forEach(btn=>btn.onclick=()=>{
@@ -647,98 +485,176 @@ document.getElementById("recruitMode").onclick=()=>{
   refresh();
 };
 
+
 document.getElementById("importStudents").onclick=()=>{
-  if(!currentStaff){ document.getElementById("studentStatus").textContent="Sign in before importing student addresses."; return; }\n  const file=document.getElementById("studentCsv").files[0];\n  const status=document.getElementById("studentStatus");\n  if(!file){status.textContent="Choose a CSV file first.";return;}\n  const reader=new FileReader();\n  reader.onload=async e=>{\n    const lines=String(e.target.result||"").split(/\\r?\\n/).filter(x=>x.trim().length);\n    if(lines.length<2){status.textContent="The CSV does not contain student rows.";return;}\n    const headers=parseCsvLine(lines[0]).map(normalizeHeader);\n    const findIndex=(names)=>{for(const n of names){const i=headers.indexOf(normalizeHeader(n));if(i>=0)return i;}return -1;};\n    const idx={studentId:findIndex(["student id","studentid","id"]),address:findIndex(["address","home address","street address"]),city:findIndex(["city"]),state:findIndex(["state"]),zip:findIndex(["zip","zipcode","postal code"]),lat:findIndex(["latitude","lat"]),lng:findIndex(["longitude","lng","lon","long"])};\n    if(idx.studentId<0||idx.address<0){status.textContent="CSV needs Student ID and Address columns.";return;}\n    const rows=[];\n    for(let r=1;r<lines.length;r++){\n      const cols=parseCsvLine(lines[r]); const val=i=>i>=0?String(cols[i]??"").trim():"";\n      const lat=idx.lat>=0&&val(idx.lat)!==""?Number(val(idx.lat)):null;\n      const lng=idx.lng>=0&&val(idx.lng)!==""?Number(val(idx.lng)):null;\n      rows.push({student_id:val(idx.studentId),address:val(idx.address),city:val(idx.city)||"Highland Park",state:val(idx.state)||"MI",zip_code:val(idx.zip),latitude:Number.isFinite(lat)?lat:null,longitude:Number.isFinite(lng)?lng:null,active:true,updated_at:new Date().toISOString()});\n    }\n    status.textContent=`Uploading ${rows.length} address records...`;\n    const {error}=await supabaseClient.from("recruitment_students").upsert(rows,{onConflict:"student_id"});\n    if(error){status.textContent="Upload blocked. We need staff-only RLS policies before the site can write student addresses.";console.error(error);return;}\n    status.textContent=`Successfully saved ${rows.length} student address records to Supabase.`;\n    await loadStudentLocationsFromSupabase();\n  };\n  reader.readAsText(file);\n};\n\ndocument.getElementById("loadStudents").onclick=async()=>{
-  if(!currentStaff){ document.getElementById("studentStatus").textContent="Sign in before loading student locations."; return; }await loadStudentLocationsFromSupabase();};\n\ndocument.getElementById("toggleStudents").onclick=()=>{
+  const status=document.getElementById("studentStatus");
+  if(!currentSession){
+    status.textContent="Sign in before importing student addresses.";
+    return;
+  }
+
+  const file=document.getElementById("studentCsv").files[0];
+  if(!file){
+    status.textContent="Choose a CSV file first.";
+    return;
+  }
+
+  const reader=new FileReader();
+  reader.onload=async e=>{
+    const lines=String(e.target.result||"").split(/\r?\n/).filter(x=>x.trim().length);
+    if(lines.length<2){
+      status.textContent="The CSV does not contain student rows.";
+      return;
+    }
+
+    const headers=parseCsvLine(lines[0]).map(normalizeHeader);
+    const findIndex=(names)=>{
+      for(const n of names){
+        const i=headers.indexOf(normalizeHeader(n));
+        if(i>=0) return i;
+      }
+      return -1;
+    };
+
+    const idx={
+      studentId:findIndex(["student id","studentid","id"]),
+      address:findIndex(["address","home address","street address"]),
+      city:findIndex(["city"]),
+      state:findIndex(["state"]),
+      zip:findIndex(["zip","zipcode","postal code"]),
+      lat:findIndex(["latitude","lat"]),
+      lng:findIndex(["longitude","lng","lon","long"])
+    };
+
+    if(idx.studentId<0 || idx.address<0){
+      status.textContent="CSV needs Student ID and Address columns.";
+      return;
+    }
+
+    const rows=[];
+    for(let r=1;r<lines.length;r++){
+      const cols=parseCsvLine(lines[r]);
+      const val=i=>i>=0 ? String(cols[i]??"").trim() : "";
+      const studentId=val(idx.studentId);
+      const address=val(idx.address);
+      if(!studentId || !address) continue;
+
+      const latRaw=val(idx.lat);
+      const lngRaw=val(idx.lng);
+      const lat=latRaw!=="" ? Number(latRaw) : null;
+      const lng=lngRaw!=="" ? Number(lngRaw) : null;
+
+      rows.push({
+        student_id:studentId,
+        address:address,
+        city:val(idx.city)||"Highland Park",
+        state:val(idx.state)||"MI",
+        zip_code:val(idx.zip),
+        latitude:Number.isFinite(lat)?lat:null,
+        longitude:Number.isFinite(lng)?lng:null,
+        active:true,
+        updated_at:new Date().toISOString()
+      });
+    }
+
+    if(!rows.length){
+      status.textContent="No valid address rows were found.";
+      return;
+    }
+
+    status.textContent=`Uploading ${rows.length} address records...`;
+    const {error}=await supabaseClient
+      .from("recruitment_students")
+      .upsert(rows,{onConflict:"student_id"});
+
+    if(error){
+      status.textContent="Upload failed: " + error.message;
+      console.error(error);
+      return;
+    }
+
+    status.textContent=`Saved ${rows.length} student address records to Supabase.`;
+    await loadStudentLocationsFromSupabase();
+  };
+
+  reader.readAsText(file);
+};
+
+document.getElementById("loadStudents").onclick=async()=>{
+  if(!currentSession){
+    document.getElementById("studentStatus").textContent="Sign in before loading student locations.";
+    return;
+  }
+  await loadStudentLocationsFromSupabase();
+};
+
+document.getElementById("toggleStudents").onclick=()=>{
   studentsVisible=!studentsVisible;
   refreshStudents();
 };
 
 
-let currentStaff=null;
-
-async function loadStaffProfile(user){
-  const {data,error}=await supabaseClient
-    .from("staff")
-    .select("display_name,email,role,active")
-    .eq("auth_user_id",user.id)
-    .maybeSingle();
-
-  if(error || !data || data.active !== true){
-    currentStaff=null;
-    return false;
-  }
-  currentStaff=data;
-  return true;
-}
-
-function setProtectedUi(signedIn){
-  const out=document.getElementById("signedOutPanel");
-  const inn=document.getElementById("signedInPanel");
-  const tools=document.getElementById("studentToolsCard");
-  if(out) out.classList.toggle("hidden",signedIn);
-  if(inn) inn.classList.toggle("hidden",!signedIn);
-  if(tools) tools.style.opacity=signedIn?"1":"0.45";
-  if(tools) tools.style.pointerEvents=signedIn?"auto":"none";
-}
-
-async function applySession(session){
-  const status=document.getElementById("authStatus");
-  if(!session?.user){
-    currentStaff=null;
-    setProtectedUi(false);
-    if(status) status.textContent="Sign in with your existing GWCA Transportation staff account.";
-    return;
-  }
-
-  const ok=await loadStaffProfile(session.user);
-  if(!ok){
-    await supabaseClient.auth.signOut();
-    setProtectedUi(false);
-    if(status) status.textContent="This account is not an active GWCA staff account.";
-    return;
-  }
-
-  setProtectedUi(true);
-  const name=document.getElementById("signedInName");
+async function applyAuthState(session){
+  currentSession=session||null;
+  const signedOut=document.getElementById("signedOutPanel");
+  const signedIn=document.getElementById("signedInPanel");
+  const card=document.getElementById("studentToolsCard");
   const email=document.getElementById("signedInEmail");
-  if(name) name.textContent=currentStaff.display_name || "GWCA Staff";
-  if(email) email.textContent=`${currentStaff.email || session.user.email} • ${currentStaff.role || "staff"}`;
+  const authStatus=document.getElementById("authStatus");
 
-  if(typeof loadStudentLocationsFromSupabase === "function"){
+  if(currentSession?.user){
+    signedOut.classList.add("hidden");
+    signedIn.classList.remove("hidden");
+    card.classList.remove("disabled-card");
+    email.textContent=currentSession.user.email || "GWCA Staff";
     await loadStudentLocationsFromSupabase();
+  }else{
+    signedOut.classList.remove("hidden");
+    signedIn.classList.add("hidden");
+    card.classList.add("disabled-card");
+    if(authStatus) authStatus.textContent="Not signed in.";
+    studentLocations=[];
+    studentsVisible=false;
+    refreshStudents();
   }
 }
 
 async function initAuth(){
   const {data:{session}}=await supabaseClient.auth.getSession();
-  await applySession(session);
-  supabaseClient.auth.onAuthStateChange(async (_event,newSession)=>{
-    await applySession(newSession);
+  await applyAuthState(session);
+
+  supabaseClient.auth.onAuthStateChange((_event,session)=>{
+    setTimeout(()=>applyAuthState(session),0);
   });
 }
 
-document.getElementById("loginBtn")?.addEventListener("click",async()=>{
+document.getElementById("loginBtn").onclick=async()=>{
   const email=document.getElementById("loginEmail").value.trim();
   const password=document.getElementById("loginPassword").value;
   const status=document.getElementById("authStatus");
+
   if(!email || !password){
-    status.textContent="Enter your staff email and password.";
+    status.textContent="Enter your email and password.";
     return;
   }
-  status.textContent="Signing in...";
-  const {error}=await supabaseClient.auth.signInWithPassword({email,password});
-  if(error){
-    status.textContent=error.message || "Sign-in failed.";
-  }
-});
 
-document.getElementById("logoutBtn")?.addEventListener("click",async()=>{
+  status.textContent="Signing in...";
+  const {data,error}=await supabaseClient.auth.signInWithPassword({email,password});
+
+  if(error){
+    status.textContent="Sign-in failed: " + error.message;
+    return;
+  }
+
+  status.textContent="Signed in.";
+  await applyAuthState(data.session);
+};
+
+document.getElementById("logoutBtn").onclick=async()=>{
   await supabaseClient.auth.signOut();
-  studentLocations=[];
-  studentsVisible=false;
-  if(typeof refreshStudents === "function") refreshStudents();
-});
+};
+
+initAuth();
 
 </script>
 </body>
